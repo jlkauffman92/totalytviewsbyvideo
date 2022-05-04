@@ -1,0 +1,159 @@
+<script src="https://apis.google.com/js/api.js"></script>
+<script>
+  //auth the app for YT readonly
+  function authenticate() {
+    return gapi.auth2.getAuthInstance()
+        .signIn({scope: "https://www.googleapis.com/auth/youtube.readonly"})
+        .then(function() { console.log("Sign-in successful"); },
+              function(err) { console.error("Error signing in", err); });
+  }
+  
+  function loadClient(){
+  	return gapi.client.load("https://youtubeanalytics.googleapis.com/$discovery/rest?version=v2").then(function(){console.log('Loaded')},function(err){console.log(err)})
+  }
+  // Make sure the client is loaded and sign-in is complete before calling this method.
+  function execute() {
+    $('#output').html('');
+    $('#output').html('Loading . . . <br>');
+    //pull id's from form
+    var idsRaw = $('#youtubeIds').val();
+    //create array of ids by space
+    var idsArry = idsRaw.split(" ");
+    //init worker set array for us to dump into
+    var workingSets = [];
+    //chop ids into chunks of 500 and load them into the working sets array
+    while (idsArry.length) {
+      workingSets.push(idsArry.splice(0,500));
+    }
+    $('#output').html('Chopping into '+workingSets.length+' parsable chunks of at most 500 ids each... <br>');
+    //pass the working sets into  our query function -- wait for results
+
+    queryItems(workingSets).then(function(result){
+      let rawResults = result;
+      let flatResults = [];
+      //data comes in a 3D array working set -> id sets -> id/views pair so we have to crawl the first dimension to pull out the chuncks of 500
+      for(let set of rawResults){
+        //then pull out the id/views pairs in each 500 chunck...
+        for(let stat of set){
+          flatResults.push(stat);
+          //and append each into flat array
+        }
+      }
+      let workingSetFlat = [];
+      //flatten working sets
+      for(let set of workingSets){
+        for(let id of set){
+          workingSetFlat.push(id);
+        }
+      }
+      let missingNumber = workingSetFlat.length - flatResults.length;
+      if(missingNumber > 0){
+        $('#output').append('Adding 0 for '+ missingNumber +' missing IDs...<br>');
+        for(let id of workingSetFlat){
+        //check if the results contains all the ids we submitted
+            if(!flatResults.some(row => row.includes(id))){
+            //set missing IDs to 0 views
+            flatResults.push([id,0])
+            console.log("Adding ID: "+ id);
+            }
+        }
+      }
+      $('#output').append("Done!<br><br>");
+      if($('#display').is(':checked')){
+        for(let stat of flatResults){
+          //finally, output the complete data
+          $('#output').append("<tr><td>"+stat[0]+"</td><td>"+stat[1]+"</td></tr>");
+        }
+      }
+      if($('#csv').is(':checked')){
+        let finalCSV = arrayToCsv(flatResults);
+        let fileName = "VideoViews_"+Date.now() + ".csv"
+        downloadBlob(finalCSV, fileName,'text/csv;charset=utf-8;');
+      }
+    });
+  }
+
+  gapi.load("client:auth2", function() {
+    gapi.auth2.init({client_id: "CLIENT_ID"});
+  });
+
+  async function queryItems(arr){
+    var result = [];
+    $('#output').append('Querying API ... <br><br>');
+    for(let i = 0; i < arr.length; i++){
+      var stringSet = arr[i].toString();
+      $('#output').append('Getting part ' + (i+1) + ' of '+ arr.length + ".<br>");
+      await gapi.client.youtubeAnalytics.reports.query({
+        "dimensions": "video",
+        "endDate": $('#enddate').val(),
+        "filters": "video==" + stringSet,
+        "ids": "channel==MINE",
+        "includeHistoricalChannelData": false,
+        "maxResults": 500,
+        "metrics": "views",
+        "startDate": $('#startdate').val(),
+    })
+        .then(function(response) {
+                $('#output').append('Retrieved ' + response.result.rows.length + " results...<br><br>");
+                result.push(response.result.rows);
+              },
+              function(err) { $('#output').append(err); });
+    }
+    return result;
+  }
+
+ function arrayToCsv(data){
+    return data.map(row =>
+      row
+      .map(String)  // convert every value to String
+      .map(v => v.replaceAll('"', '""'))  // escape double colons
+      .map(v => `"${v}"`)  // quote it
+      .map(v => v.replaceAll("=",""))
+      .join(',')  // comma-separated
+    ).join('\r\n');  // rows starting on new lines
+ }
+function downloadBlob(content, filename, contentType) {
+  // Create a blob
+  var blob = new Blob([content], { type: contentType });
+  var url = URL.createObjectURL(blob);
+
+  // Create a link to download it
+  var pom = document.createElement('a');
+  pom.href = url;
+  pom.setAttribute('download', filename);
+  pom.click();
+}
+
+</script>
+<div>
+  <p>
+    This is a tool that will generate video views for videos (in your channel) for a given date range. 
+    You can copy and paste video IDs from Excel, Google Sheets, Airtable, etc.
+    <b>Note:</b> This app does not store any of your personal data, nor does it transmit any data other than that required to lookup your video view info.
+  </p>
+</div>
+<button onclick="authenticate().then(loadClient).then(function(){$('#goBtn').prop('disabled',false)})">Sign Into YouTube</button>
+</br>
+  <br>
+<label for='video-ids'>Video IDs (separated by spaces)</label>
+  <br>
+<input name="video-ids" type="text" id="youtubeIds"/>
+  <br>
+  <br>
+  <label for='start-date'>Start Date</label>
+<input name="start-date" type="date" id="startdate"/>
+      <br>
+  </br>
+  <label for='end-date'>End Date</label>
+<input name="end-date" type="date" id="enddate"/>
+  </br>
+      <br>
+<label for='display'>Display Results</label>
+<input name="display" type="checkbox" id="display"/>
+<br>
+<label for='csv'>Download CSV</label>
+<input name="csv" type="checkbox" id="csv"/>
+<br>
+<button id="goBtn" disabled onclick="execute()">Go!</button>
+    <br>
+<table id="output"></table>
